@@ -1,4 +1,4 @@
-package com.testtask.idproducer;
+package com.testtask.idgenerator;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,13 +12,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
-class IdProducerApplicationTests {
+class IdGeneratorApplicationTests {
 
     @Autowired
     private MockMvc mvc;
 
     @Test
-    void contextLoads() throws Exception {
+    void testRest() throws Exception {
         mvc.perform(get("/id"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
