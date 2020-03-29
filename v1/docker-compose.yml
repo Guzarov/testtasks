@@ -4,9 +4,25 @@ services:
     build: .
     ports:
       - "8080:8080"
+    environment:
+      - DIAPASON_SIZE=10
+#      - GENERATOR_IMPL=uuid
+      - GENERATOR_IMPL=diapasons
+      - MEMCACHED_HOST=memcached
+    depends_on:
+      - memcached
+    restart: on-failure
   swagger:
     image: swaggerapi/swagger-ui
+    environment:
+      - API_URL=http://localhost:8080/v3/api-docs
     ports:
       - "8081:8080"
     depends_on:
       - id-generator
+    restart: on-failure
+  memcached:
+    image: memcached
+    ports:
+      - "11211:11211"
+    restart: on-failure
