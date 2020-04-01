@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigInteger;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @Profile({"diapasons", "default"})
@@ -22,8 +23,8 @@ public class MemcachedGenerator implements Generator {
     private final MemcachedClient client;
     private final DiapasonSizeStrategy sizeStrategy;
 
-    private MemcachedDiapason diapason;
-    private long delta;
+    private volatile MemcachedDiapason diapason;
+    private AtomicLong delta = new AtomicLong(0);
 
     public MemcachedGenerator(MemcachedClient client, DiapasonSizeStrategy sizeStrategy)
             throws ExecutionException, InterruptedException {
@@ -34,8 +35,7 @@ public class MemcachedGenerator implements Generator {
     }
 
 
-    private void reserveNextDiapason(long diapasonSize) throws ExecutionException, InterruptedException {
-        var reservationCompleted = false;
+    private synchronized void reserveNextDiapason(long diapasonSize) throws ExecutionException, InterruptedException {
         do {
             var exists = getOrCreate();
             logger.debug("About to reserve next diapason (current is " + diapason +
@@ -44,48 +44,43 @@ public class MemcachedGenerator implements Generator {
             CASResponse casResponse = client.cas(KEY, exists.getCas(), diapason);
             switch (casResponse) {
                 case OK:
-                    reservationCompleted = true;
-                    break;
+                    delta.set(0);
+                    return;
                 case EXISTS:
                     logger.debug("Someone already reserved this, try next");
-                    reservationCompleted = false;
                     break;
                 default:
                     throw new IllegalStateException("Cannot CAS: " + casResponse);
             }
-        } while (!reservationCompleted);
-        delta = 0;
+        } while (true);
     }
 
     private CASValue<Object> getOrCreate() throws ExecutionException, InterruptedException {
         var exists = client.gets(KEY);
         if (exists == null) {
-            if (!client.set(KEY, 0, new MemcachedDiapason(BigInteger.ZERO, 0L)).get()) {
-                throw new RuntimeException("Cannot create value for key " + KEY);
-            }
+            // server stores the data, only if it does not already exist
+            client.add(KEY, 0, new MemcachedDiapason(BigInteger.ZERO, 0L)).get();
+            exists = client.gets(KEY);
         }
-        return client.gets(KEY);
+        return exists;
     }
 
     @Override
     public BigInteger generate() {
-        synchronized (this) {
-            try {
-                delta++;
-                var current = diapason.getFrom().add(BigInteger.valueOf(delta));
-                var comparisonResult = current.compareTo(diapason.getTo());
-                if (comparisonResult == 0) {
-                    reserveNextDiapason(sizeStrategy.getSize());
-                } else if (comparisonResult > 0) {
-                    throw new RuntimeException("Slipped diapason detected: " +
-                            current + ", delta = " + delta + ". Please restart service.");
-                }
-                return current;
-            } catch (RuntimeException re) {
-                throw re;
-            } catch (Exception e) {
-                throw new RuntimeException("Cannot generate. Please restart service", e);
+        try {
+            var current = diapason.getFrom().add(BigInteger.valueOf(delta.incrementAndGet()));
+            var comparisonResult = current.compareTo(diapason.getTo());
+            if (comparisonResult == 0) {
+                reserveNextDiapason(sizeStrategy.getSize());
+            } else if (comparisonResult > 0) {
+                throw new RuntimeException("Slipped diapason detected: " +
+                        current + ", delta = " + delta + ". Please restart service.");
             }
+            return current;
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception e) {
+            throw new RuntimeException("Cannot generate. Please restart service", e);
         }
     }
 
